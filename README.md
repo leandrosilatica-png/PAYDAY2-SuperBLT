@@ -1,6 +1,6 @@
 # PAYDAY 2 SuperBLT — performance fork
 
-[![Build](https://img.shields.io/github/actions/workflow/status/leandrosilatica-png/PAYDAY2-SuperBLT/create_build.yml?label=build)](https://github.com/leandrosilatica-png/PAYDAY2-SuperBLT/actions/workflows/create_build.yml)
+[![Build](https://img.shields.io/github/actions/workflow/status/chronicmods/PAYDAY2-SuperBLT/create_build.yml?label=build)](https://github.com/chronicmods/PAYDAY2-SuperBLT/actions/workflows/create_build.yml)
 
 This is my performance-focused fork of SuperBLT for PAYDAY 2's 64-bit build. The goal is simple: cut the avoidable startup and loading overhead without breaking the Lua, Wren or plugin APIs mods already use.
 
@@ -25,7 +25,7 @@ The full technical breakdown, before/after numbers and test notes are in [CHANGE
 
 ## Download and install
 
-Fork builds are attached to the latest successful [GitHub Actions run](https://github.com/leandrosilatica-png/PAYDAY2-SuperBLT/actions/workflows/create_build.yml).
+Fork builds are attached to the latest successful [GitHub Actions run](https://github.com/chronicmods/PAYDAY2-SuperBLT/actions/workflows/create_build.yml).
 
 If you want the current signed upstream beta instead, use [PAYDAY 2 SuperBLT on ModWorkshop](https://modworkshop.net/mod/58342).
 
@@ -40,7 +40,7 @@ Never install both `WSOCK32.dll` and `IPHLPAPI.dll`. Keep `WSOCK32.dll` unless y
 You need Visual Studio 2022 with the Desktop development with C++ workload, CMake and Python 3.
 
 ```powershell
-git clone --recursive https://github.com/leandrosilatica-png/PAYDAY2-SuperBLT.git
+git clone --recursive https://github.com/chronicmods/PAYDAY2-SuperBLT.git
 cd PAYDAY2-SuperBLT
 cmake -S . -B build -A x64 -G "Visual Studio 17 2022"
 cmake --build build --config RelWithDebInfo --target SuperBLT --parallel
@@ -67,3 +67,4 @@ The existing Lua and plugin documentation is on the [SuperBLT website](https://s
 The Lua basemod lives in [diesel-modding/PAYDAY2-SuperBLT-Lua](https://github.com/diesel-modding/PAYDAY2-SuperBLT-Lua).
 
 This project inherits SuperBLT's GPL-3.0 licence and original contributor history. See [CREDITS.md](CREDITS.md) and [LICENSE.txt](LICENSE.txt).
+
