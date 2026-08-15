@@ -67,4 +67,3 @@ The existing Lua and plugin documentation is on the [SuperBLT website](https://s
 The Lua basemod lives in [diesel-modding/PAYDAY2-SuperBLT-Lua](https://github.com/diesel-modding/PAYDAY2-SuperBLT-Lua).
 
 This project inherits SuperBLT's GPL-3.0 licence and original contributor history. See [CREDITS.md](CREDITS.md) and [LICENSE.txt](LICENSE.txt).
-
