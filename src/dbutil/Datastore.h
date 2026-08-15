@@ -42,7 +42,7 @@ class BLTFileDataStore : public BLTAbstractDataStore
 
   private:
 	BLTFileDataStore() = default; // Used by Open, which can return null to indicate it didn't open properly
-	int fd = -1;
+	void* file_handle = nullptr;
 	size_t file_size = 0;
 };
 

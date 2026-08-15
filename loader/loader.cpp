@@ -41,9 +41,9 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID)
 		    Util::GetFileType("IPHLPAPI.dll") == Util::FileType_File)
 		{
 			MessageBoxA(nullptr,
-			            "You have both SuperBLT DLLs installed - IPHLPAPI.dll and \nWSOCK32.dll. "
-			            "Please delete one (preferrably, delete IPHLPAPI.dll).",
-			            "Both SuperBLT DLLs installed!", MB_OK);
+			            "Both WSOCK32.dll and IPHLPAPI.dll are installed. Delete one before starting PAYDAY 2. "
+			            "Keep WSOCK32.dll unless your machine specifically needs IPHLPAPI.dll.",
+			            "SuperBLT: duplicate loader DLLs", MB_OK);
 			ExitProcess(1);
 		}
 
@@ -74,7 +74,9 @@ void SBLT_PROXY_LOADER_FN_CXX(uint64_t functionAndDllId)
 	HMODULE hL = LoadLibrary(dllPath.c_str());
 	if (!hL)
 	{
-		std::string message = "Failed to load system " + dllName;
+		DWORD error = GetLastError();
+		std::string message = "SuperBLT couldn't load the Windows system DLL " + dllName + " (Windows error " +
+		                      std::to_string(error) + ").";
 		MessageBoxA(nullptr, message.c_str(), "SuperBLT Loader", MB_OK);
 		ExitProcess(1);
 	}

@@ -55,9 +55,9 @@ void blt::platform::InitPlatform()
 	if (!SignatureSearch::Search())
 	{
 		MessageBox(nullptr,
-		           "This SuperBLT version is not compatible with your current game version. The game will be started "
-		           "without SuperBLT.",
-		           "SuperBLT version incompatible", MB_OK);
+		           "SuperBLT couldn't find the engine signatures it needs. PAYDAY 2 will start without mods. "
+		           "Update SuperBLT and check mods/logs for details.",
+		           "SuperBLT: unsupported game build", MB_OK);
 
 		if (console)
 			console->Close(true);

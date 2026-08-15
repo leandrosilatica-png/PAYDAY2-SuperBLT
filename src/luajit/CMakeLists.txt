@@ -100,21 +100,21 @@ target_include_directories(luajit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CUR
 target_compile_definitions(lua51-shared PUBLIC LUA_BUILD_AS_DLL)
 
 set_property(TARGET lua51 PROPERTY
-             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 set_property(TARGET lua51 PROPERTY CXX_STANDARD 20)
 
 set_property(TARGET lua51-shared PROPERTY
-             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 set_property(TARGET lua51-shared PROPERTY CXX_STANDARD 20)
 
 set_property(TARGET LuaBuildVM PROPERTY
-             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 set_property(TARGET LuaBuildVM PROPERTY CXX_STANDARD 20)
 
 set_property(TARGET luajit PROPERTY
-             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 set_property(TARGET luajit PROPERTY CXX_STANDARD 20)

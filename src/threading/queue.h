@@ -47,7 +47,7 @@ namespace raidhook
 		{
 		  public:
 			EventItem(EventFunction runFunction, DataT data);
-			EventItem(EventItem&&); // VC++ 2013 doesn't let you default this. On VC++ 2015 don't even bother declaring.
+			EventItem(EventItem&&) noexcept = default;
 			void operator()();
 
 		  private:
@@ -109,11 +109,6 @@ namespace raidhook
 	{
 	}
 
-	template <typename DataT>
-	EventQueue<DataT>::EventItem::EventItem(EventItem&& mv) : mFunc(mv.mFunc), mData(std::move(mv.mData))
-	{
-	}
-
 	template <typename DataT> void EventQueue<DataT>::EventItem::operator()()
 	{
 		mFunc(std::move(mData));
@@ -130,16 +125,11 @@ namespace raidhook
 		decltype(eventQueue) localQueue;
 		{
 			std::lock_guard<std::mutex> locker(lock);
-			// localQueue = std::move(eventQueue); standard is a little iffy on what happens to eventQueue after this,
-			// so do it manually
-			while (!eventQueue.empty())
-			{
-				localQueue.push_back(std::move(eventQueue.front()));
-				eventQueue.pop_front();
-			}
+			localQueue.swap(eventQueue);
 		}
 
-		std::for_each(localQueue.begin(), localQueue.end(), [](EventItem& e) { e(); });
+		for (EventItem& event : localQueue)
+			event();
 	}
 
 	template <typename DataT> void EventQueue<DataT>::AddToQueue(EventItem item)

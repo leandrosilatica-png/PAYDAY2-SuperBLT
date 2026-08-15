@@ -5,16 +5,16 @@
 #include <vector>
 #define INCLUDE_TRY_OPEN_FUNCTIONS
 
+#include "../dbutil/DB.h"
 #include "assets.h"
 #include "platform.h"
 #include "subhook.h"
-#include "../dbutil/DB.h"
 
 #include <stdio.h>
 
-#include <map>
 #include <string>
 #include <tweaker/db_hooks.h>
+#include <unordered_map>
 #include <utility>
 
 #include <AK/SoundEngine/Common/AkSoundEngine.h>
@@ -30,14 +30,13 @@ DECLARE_PASSTHROUGH_ARRAY(1)
 DECLARE_PASSTHROUGH_ARRAY(2)
 DECLARE_PASSTHROUGH(try_open_property_match_resolver)
 
-
 static subhook::Hook WwDevice_loadBankIdstringDetour;
 static subhook::Hook WwDevice_idToEntryDetour;
 
 // Access happens on two different threads
 std::mutex customWwiseMapsMutex;
-std::map<blt::idstring, std::string> customWwiseSoundbankNames;
-std::map<unsigned int, blt::idstring> customWwiseIdToEntryNames;
+std::unordered_map<blt::idstring, std::string> customWwiseSoundbankNames;
+std::unordered_map<unsigned int, blt::idstring> customWwiseIdToEntryNames;
 
 class sound_WwDevice
 {
@@ -62,11 +61,16 @@ SoundBank* sound_WwDevice__load_bank_idstring_h(sound_WwDevice* this_, idstr ban
 
 	if (soundbank == nullptr)
 	{
-		std::lock_guard customListLock(customWwiseMapsMutex);
-		if (customWwiseSoundbankNames.find(bank._id) != customWwiseSoundbankNames.end())
+		std::string bankName;
 		{
-			soundbank = this_->load_bank_string(customWwiseSoundbankNames[bank._id].c_str(), async);
+			std::lock_guard customListLock(customWwiseMapsMutex);
+			auto entry = customWwiseSoundbankNames.find(bank._id);
+			if (entry != customWwiseSoundbankNames.end())
+				bankName = entry->second;
 		}
+
+		if (!bankName.empty())
+			soundbank = this_->load_bank_string(bankName.c_str(), async);
 	}
 
 	return soundbank;
@@ -86,15 +90,12 @@ idstr* sound_WwDevice__id_to_entry_h(sound_WwDevice* this_, idstr* result, unsig
 
 	std::lock_guard customListLock(customWwiseMapsMutex);
 
-	if (customWwiseIdToEntryNames.find(wwise_id) != customWwiseIdToEntryNames.end())
-	{
-		result->_id = customWwiseIdToEntryNames[wwise_id];
-	}
+	auto entry = customWwiseIdToEntryNames.find(wwise_id);
+	if (entry != customWwiseIdToEntryNames.end())
+		result->_id = entry->second;
 
 	return result;
 }
-
-
 
 void blt::win32::InitAssets()
 {
@@ -113,18 +114,17 @@ void blt::win32::InitAssets()
 	setup_extra_asset_hooks();
 	blt::InitDBHooks();
 
-	
-	WwDevice_loadBankIdstringDetour.Install(sound_WwDevice__load_bank_idstring, &sound_WwDevice__load_bank_idstring_h, HOOK_FLAG);
+	WwDevice_loadBankIdstringDetour.Install(sound_WwDevice__load_bank_idstring, &sound_WwDevice__load_bank_idstring_h,
+	                                        HOOK_FLAG);
 	WwDevice_idToEntryDetour.Install(sound_WwDevice__id_to_entry, &sound_WwDevice__id_to_entry_h, HOOK_FLAG);
 }
-
 
 unsigned int GetWwiseHash(const char* str)
 {
 	unsigned int hash = 2166136261;
-	for (int i = 0; i < strlen(str); i++)
+	while (*str)
 	{
-		hash = str[i] ^ (16777619 * hash);
+		hash = *str++ ^ (16777619 * hash);
 	}
 	return hash;
 }
@@ -138,8 +138,8 @@ void blt::platform::wwise::RegisterCustomSoundbank(const char* dbPath)
 
 	blt::idstring hashedPath = blt::idstring_hash(dbPath);
 	unsigned int wwiseHash = GetWwiseHash(dbPath);
-	customWwiseSoundbankNames.insert(std::make_pair(hashedPath, dbPath));
-	customWwiseIdToEntryNames.insert(std::make_pair(wwiseHash, hashedPath));
+	customWwiseSoundbankNames.insert_or_assign(hashedPath, dbPath);
+	customWwiseIdToEntryNames.insert_or_assign(wwiseHash, hashedPath);
 }
 
 void blt::platform::wwise::UnregisterCustomSoundbank(const char* dbPath)
@@ -152,10 +152,8 @@ void blt::platform::wwise::UnregisterCustomSoundbank(const char* dbPath)
 	blt::idstring hashedPath = blt::idstring_hash(dbPath);
 
 	unsigned int wwiseHash = GetWwiseHash(dbPath);
-	if (customWwiseSoundbankNames.find(hashedPath) != customWwiseSoundbankNames.end())
-		customWwiseSoundbankNames.erase(hashedPath);
-	if (customWwiseIdToEntryNames.find(wwiseHash) != customWwiseIdToEntryNames.end())
-		customWwiseIdToEntryNames.erase(wwiseHash);
+	customWwiseSoundbankNames.erase(hashedPath);
+	customWwiseIdToEntryNames.erase(wwiseHash);
 }
 
 void blt::platform::wwise::RegisterCustomStreamedWemPath(unsigned int wemId, const char* dbPath)
@@ -165,13 +163,12 @@ void blt::platform::wwise::RegisterCustomStreamedWemPath(unsigned int wemId, con
 
 	std::lock_guard customListLock(customWwiseMapsMutex);
 
-	customWwiseIdToEntryNames.insert(std::make_pair(wemId, blt::idstring_hash(dbPath)));
+	customWwiseIdToEntryNames.insert_or_assign(wemId, blt::idstring_hash(dbPath));
 }
 
 void blt::platform::wwise::UnregisterCustomStreamedWemPath(unsigned int wemId)
 {
 	std::lock_guard customListLock(customWwiseMapsMutex);
 
-	if (customWwiseIdToEntryNames.find(wemId) != customWwiseIdToEntryNames.end())
-		customWwiseIdToEntryNames.erase(wemId);
+	customWwiseIdToEntryNames.erase(wemId);
 }

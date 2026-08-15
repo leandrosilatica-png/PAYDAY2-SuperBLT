@@ -110,7 +110,10 @@ namespace raidhook
 
 			void LoggerImpl::flush()
 			{
-				mOut << std::endl;
+				std::lock_guard<std::mutex> lock(GetLoggerMutex());
+				std::cout.flush();
+				if (mIsOpen)
+					mOut.flush();
 			}
 
 			LoggerImpl::LoggerImpl(std::string&& file)
@@ -158,8 +161,6 @@ namespace raidhook
 				}
 
 				mOut << msg << mEndl;
-
-				mOut.flush();
 			}
 		} // namespace
 

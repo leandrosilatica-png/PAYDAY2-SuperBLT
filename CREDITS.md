@@ -61,4 +61,4 @@
 	* xDarkWolf
 	* zekesonxx
 
-For an always up to date list of contributors you can check the contributor statistics.
+For the full inherited history, see the [upstream contributor graph](https://github.com/diesel-modding/PAYDAY2-SuperBLT/graphs/contributors).

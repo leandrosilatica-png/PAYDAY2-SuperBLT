@@ -14,13 +14,18 @@ namespace raidhook
 
 		string GetFileContents(const string& filename)
 		{
-			ifstream t(filename, std::ifstream::binary);
-			string str;
+			ifstream file(filename, std::ios::binary | std::ios::ate);
+			if (!file)
+				return {};
 
-			t.seekg(0, std::ios::end);
-			str.reserve(static_cast<string::size_type>(t.tellg()));
-			t.seekg(0, std::ios::beg);
-			str.assign((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+			std::streamoff end = file.tellg();
+			if (end <= 0)
+				return {};
+
+			string str(static_cast<size_t>(end), '\0');
+			file.seekg(0, std::ios::beg);
+			file.read(str.data(), static_cast<std::streamsize>(str.size()));
+			str.resize(static_cast<size_t>(file.gcount()));
 
 			return str;
 		}
@@ -28,7 +33,9 @@ namespace raidhook
 		// FIXME this function really should return a boolean, if it succeeded
 		void EnsurePathWritable(const std::string& path)
 		{
-			int finalSlash = path.find_last_of('/');
+			size_t finalSlash = path.find_last_of("/\\");
+			if (finalSlash == std::string::npos)
+				return;
 			std::string finalPath = path.substr(0, finalSlash);
 			if (DirectoryExists(finalPath))
 				return;
@@ -69,11 +76,12 @@ namespace raidhook
 
 		bool CreateDirectoryPath(const std::string& path)
 		{
-			std::string newPath = "";
+			std::string newPath;
+			newPath.reserve(path.size() + 1);
 			std::vector<std::string> paths = Util::SplitString(path, '/');
 			for (const auto& i : paths)
 			{
-				newPath = newPath + i + "/";
+				newPath.append(i).push_back('/');
 				CreateDirectorySingle(newPath);
 			}
 			return true;
@@ -81,14 +89,17 @@ namespace raidhook
 
 		void SplitString(const std::string& s, char delim, std::vector<std::string>& elems)
 		{
-			std::istringstream ss(s);
-			std::string item;
-			while (std::getline(ss, item, delim))
+			size_t start = 0;
+			while (start <= s.size())
 			{
-				if (!item.empty())
-				{
-					elems.push_back(item);
-				}
+				size_t end = s.find(delim, start);
+				if (end == std::string::npos)
+					end = s.size();
+				if (end != start)
+					elems.emplace_back(s, start, end - start);
+				if (end == s.size())
+					break;
+				start = end + 1;
 			}
 		}
 

@@ -4,9 +4,12 @@
 
 #include "convert.h"
 
+#include "dbutil/Datastore.h"
 #include "util/util.h"
 
 #include <diesel/font.h>
+
+#include <cstring>
 
 struct FontHeader
 {
@@ -16,6 +19,18 @@ struct FontHeader
 	size_t glyphs_allocator;
 	// there's more, but above is all we need to determine bitness
 };
+
+bool CheckFontRequiresConversion(BLTAbstractDataStore* datastore)
+{
+	if (datastore->size() < sizeof(FontHeader))
+		return true;
+
+	FontHeader header;
+	if (datastore->read(0, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header))
+		return true;
+
+	return header.glyphs_allocator != 0 || header.glyphs_data == 0;
+}
 
 std::vector<uint8_t> ConvertFont(std::vector<uint8_t>&& data, const std::string& path)
 {
@@ -37,31 +52,29 @@ std::vector<uint8_t> ConvertFont(std::vector<uint8_t>&& data, const std::string&
 	                                                              diesel::FileSourcePlatform::WINDOWS_32)))
 	{
 		char msg[512];
-		snprintf(msg, sizeof(msg), "Error occurred while reading 32bit Font, is the file corrupt? File: %s",
+		snprintf(msg, sizeof(msg), "32-bit font conversion failed for '%s'; the file is invalid or unsupported.",
 		         path.c_str());
-		RAIDHOOK_LOG_LOG(msg);
+		RAIDHOOK_LOG_ERROR(msg);
 
 		return data;
 	}
 
 	reader.Close();
 
-	
 	// Now write it back out to our data vector
 
 	Writer writer;
 	MemoryWriterContainer* container = (MemoryWriterContainer*)writer.GetContainer();
 
 	font.Write(writer,
-	         diesel::DieselFormatsLoadingParameters(diesel::EngineVersion::DIESEL_V3, diesel::Renderer::UNSPECIFIED,
-	                                                diesel::FileSourcePlatform::WINDOWS_64));
+	           diesel::DieselFormatsLoadingParameters(diesel::EngineVersion::DIESEL_V3, diesel::Renderer::UNSPECIFIED,
+	                                                  diesel::FileSourcePlatform::WINDOWS_64));
 
 	writer.Close();
 
-	// Nasty bodge, I'm sure this is undefined behaviour but it will work here :)
-	std::vector<char> signedData = container->TakeData();
-	std::vector<uint8_t>* aliasingViolationLivesHere = (std::vector<uint8_t>*)&signedData;
-	std::vector<uint8_t> unsignedData = std::move(*aliasingViolationLivesHere);
-
-	return unsignedData;
+	const std::vector<char>& convertedData = container->GetData();
+	std::vector<uint8_t> result(convertedData.size());
+	if (!result.empty())
+		memcpy(result.data(), convertedData.data(), result.size());
+	return result;
 }

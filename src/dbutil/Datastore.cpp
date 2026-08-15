@@ -2,12 +2,11 @@
 #include "util/util.h"
 
 #include <assert.h>
-#include <fcntl.h>
+#include <limits>
 #include <stdlib.h>
 #include <string.h>
 
-#include <io.h>
-#define lseek64 _lseeki64
+#include <Windows.h>
 
 // BLTAbstractDataStore
 
@@ -34,34 +33,80 @@ uint64_t BLTAbstractDataStore::state()
 
 BLTFileDataStore* BLTFileDataStore::Open(std::string filePath)
 {
-	int flags = O_RDONLY | O_BINARY;
-	int fd = open(filePath.c_str(), flags);
+	HANDLE fileHandle = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+	                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
 
 	// Make sure the file opened correctly
-	if (fd == -1)
+	if (fileHandle == INVALID_HANDLE_VALUE)
 	{
 		return nullptr;
 	}
 
-	auto obj = new BLTFileDataStore();
-	obj->fd = fd;
+	LARGE_INTEGER fileSize;
+	if (!GetFileSizeEx(fileHandle, &fileSize) || fileSize.QuadPart < 0 ||
+	    static_cast<unsigned long long>(fileSize.QuadPart) > std::numeric_limits<size_t>::max())
+	{
+		CloseHandle(fileHandle);
+		return nullptr;
+	}
 
-	int64_t res = lseek64(fd, 0, SEEK_END);
-	assert(res != -1);
-	obj->file_size = (size_t)res;
+	auto obj = new BLTFileDataStore();
+	obj->file_handle = fileHandle;
+	obj->file_size = static_cast<size_t>(fileSize.QuadPart);
 
 	return obj;
 }
 
 BLTFileDataStore::~BLTFileDataStore()
 {
-	::close(fd);
+	CloseHandle(static_cast<HANDLE>(file_handle));
 }
 
 size_t BLTFileDataStore::read(uint64_t position_in_file, uint8_t* data, size_t length)
 {
-	lseek64(fd, position_in_file, SEEK_SET);
-	size_t count = ::read(fd, data, length);
+	if (length == 0)
+		return 0;
+
+	HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+	assert(event != nullptr);
+	if (event == nullptr)
+		return 0;
+
+	size_t count = 0;
+	while (count < length)
+	{
+		if (count > std::numeric_limits<uint64_t>::max() - position_in_file)
+			break;
+
+		const uint64_t offset = position_in_file + count;
+		const size_t remaining = length - count;
+		const DWORD chunk = remaining > std::numeric_limits<DWORD>::max() ? std::numeric_limits<DWORD>::max()
+		                                                                  : static_cast<DWORD>(remaining);
+
+		OVERLAPPED request{};
+		request.Offset = static_cast<DWORD>(offset);
+		request.OffsetHigh = static_cast<DWORD>(offset >> 32);
+		request.hEvent = event;
+
+		if (!ResetEvent(event))
+			break;
+
+		if (!ReadFile(static_cast<HANDLE>(file_handle), data + count, chunk, nullptr, &request) &&
+		    GetLastError() != ERROR_IO_PENDING)
+		{
+			break;
+		}
+
+		DWORD bytesRead = 0;
+		if (!GetOverlappedResult(static_cast<HANDLE>(file_handle), &request, &bytesRead, TRUE))
+			break;
+
+		count += bytesRead;
+		if (bytesRead < chunk)
+			break;
+	}
+
+	CloseHandle(event);
 	assert(count == length);
 
 	return count;

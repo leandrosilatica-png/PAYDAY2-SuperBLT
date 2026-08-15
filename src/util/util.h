@@ -34,8 +34,8 @@ namespace raidhook
 		// String split from https://stackoverflow.com/a/236803
 		void SplitString(const std::string& s, char delim, std::vector<std::string>& elems);
 		std::vector<std::string> SplitString(const std::string& s, char delim);
-		std::string GetDirectoryHash(std::string directory);
-		std::string GetFileHash(std::string filename);
+		std::string GetDirectoryHash(const std::string& directory);
+		std::string GetFileHash(const std::string& filename);
 		bool MoveDirectory(const std::string& path, const std::string& destination);
 
 		template <typename T> std::string ToHex(T num);
@@ -45,7 +45,7 @@ namespace raidhook
 		std::string GetModuleFileNameCxx(HMODULE hModule);
 
 		// See hashing.cpp
-		typedef std::string (*DirectoryHashFunction)(std::string);
+		typedef std::string (*DirectoryHashFunction)(const std::string&);
 		typedef void (*HashResultReceiver)(lua_State* L, int ref, std::string filename, std::string result);
 		void RunAsyncHash(lua_State* L, int ref, std::string filename, DirectoryHashFunction hasher,
 		                  HashResultReceiver callback);
@@ -257,7 +257,7 @@ namespace blt
 {
 	idstring idstring_hash(const std::string& text);
 
-	extern const char *SBLT_VERSION;
+	extern const char* SBLT_VERSION;
 
 	// Thank you, Raymond Chen
 	// https://devblogs.microsoft.com/oldnewthing/20041025-00/?p=37483

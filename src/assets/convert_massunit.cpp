@@ -4,9 +4,12 @@
 
 #include "convert.h"
 
+#include "dbutil/Datastore.h"
 #include "util/util.h"
 
 #include <diesel/modern/massunit.h>
+
+#include <cstring>
 
 struct MassunitHeader
 {
@@ -15,6 +18,18 @@ struct MassunitHeader
 	uint64_t types_data;
 	uint64_t types_allocator;
 };
+
+bool CheckMassunitRequiresConversion(BLTAbstractDataStore* datastore)
+{
+	if (datastore->size() < sizeof(MassunitHeader))
+		return true;
+
+	MassunitHeader header;
+	if (datastore->read(0, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header))
+		return true;
+
+	return header.types_allocator != 0;
+}
 
 std::vector<uint8_t> ConvertMassunit(std::vector<uint8_t>&& data, const std::string& path)
 {
@@ -37,9 +52,9 @@ std::vector<uint8_t> ConvertMassunit(std::vector<uint8_t>&& data, const std::str
 	                                                            diesel::FileSourcePlatform::WINDOWS_32)))
 	{
 		char msg[512];
-		snprintf(msg, sizeof(msg), "Error occurred while reading 32bit Massunit, is the file corrupt? File: %s",
+		snprintf(msg, sizeof(msg), "32-bit massunit conversion failed for '%s'; the file is invalid or unsupported.",
 		         path.c_str());
-		RAIDHOOK_LOG_LOG(msg);
+		RAIDHOOK_LOG_ERROR(msg);
 
 		return data;
 	}
@@ -57,10 +72,9 @@ std::vector<uint8_t> ConvertMassunit(std::vector<uint8_t>&& data, const std::str
 
 	writer.Close();
 
-	// Nasty bodge, I'm sure this is undefined behaviour but it will work here :)
-	std::vector<char> signedData = container->TakeData();
-	std::vector<uint8_t>* aliasingViolationLivesHere = (std::vector<uint8_t>*)&signedData;
-	std::vector<uint8_t> unsignedData = std::move(*aliasingViolationLivesHere);
-
-	return unsignedData;
+	const std::vector<char>& convertedData = container->GetData();
+	std::vector<uint8_t> result(convertedData.size());
+	if (!result.empty())
+		memcpy(result.data(), convertedData.data(), result.size());
+	return result;
 }

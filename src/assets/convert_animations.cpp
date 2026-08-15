@@ -5,10 +5,13 @@
 #include "convert.h"
 
 // Please forgive me, writing a zlib compression routine from scratch is so painful
+#include "dbutil/Datastore.h"
 #include "fileio/zlibcompression.h"
 #include "util/util.h"
 
 #include <diesel/animation.h>
+
+#include <cstring>
 
 struct AnimationHeader // 32bit, 64bit has extra padding here on purpose
 {
@@ -17,6 +20,22 @@ struct AnimationHeader // 32bit, 64bit has extra padding here on purpose
 	uint32_t original_location;
 	uint32_t file_size;
 };
+
+bool CheckAnimationRequiresConversion(BLTAbstractDataStore* datastore)
+{
+	if (datastore->size() < sizeof(AnimationHeader))
+		return true;
+
+	AnimationHeader header;
+	if (datastore->read(0, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header))
+		return true;
+
+	// Compressed files still need to go through the converter so the inner header can be checked.
+	if ((header.type_id & 0xFF) == 0x78)
+		return true;
+
+	return static_cast<size_t>(header.file_size) == datastore->size();
+}
 
 std::vector<uint8_t> ConvertAnimation(std::vector<uint8_t>&& data, const std::string& path)
 {
@@ -27,17 +46,14 @@ std::vector<uint8_t> ConvertAnimation(std::vector<uint8_t>&& data, const std::st
 	{
 		// We are zlib compressed
 
-		uint32_t uncompressed_size = *(uint32_t*)(data.data() + data.size() - 4);
+		uint32_t uncompressed_size;
+		memcpy(&uncompressed_size, data.data() + data.size() - sizeof(uncompressed_size), sizeof(uncompressed_size));
 
-		// Intentional copy
-		std::vector<uint8_t> data_copy = data;
-
-		data.clear();
-		data.resize(uncompressed_size);
-
-		compression::ZlibDecompression::DecompressBuffer((char*)data_copy.data(), data_copy.size() - 4, (char*)data.data(),
-		                                                 uncompressed_size);
-
+		std::vector<uint8_t> uncompressed(uncompressed_size);
+		compression::ZlibDecompression::DecompressBuffer(reinterpret_cast<char*>(data.data()), data.size() - 4,
+		                                                 reinterpret_cast<char*>(uncompressed.data()),
+		                                                 uncompressed.size());
+		data = std::move(uncompressed);
 	}
 
 	AnimationHeader* header = (AnimationHeader*)data.data();
@@ -46,19 +62,19 @@ std::vector<uint8_t> ConvertAnimation(std::vector<uint8_t>&& data, const std::st
 	{
 		return data;
 	}
-	
+
 	// Parse the contents in 32-bit format
 	diesel::Animation animation;
 	Reader reader((char*)data.data(), data.size(), false);
 
-	if (!animation.ReadUncompressed(reader, diesel::DieselFormatsLoadingParameters(diesel::EngineVersion::PAYDAY_2_LATEST,
-	                                                                   diesel::Renderer::UNSPECIFIED,
-	                                                                   diesel::FileSourcePlatform::WINDOWS_32)))
+	if (!animation.ReadUncompressed(reader, diesel::DieselFormatsLoadingParameters(
+												diesel::EngineVersion::PAYDAY_2_LATEST, diesel::Renderer::UNSPECIFIED,
+												diesel::FileSourcePlatform::WINDOWS_32)))
 	{
 		char msg[512];
-		snprintf(msg, sizeof(msg), "Error occurred while reading 32bit Animation, is the file corrupt? File: %s",
+		snprintf(msg, sizeof(msg), "32-bit animation conversion failed for '%s'; the file is invalid or unsupported.",
 		         path.c_str());
-		RAIDHOOK_LOG_LOG(msg);
+		RAIDHOOK_LOG_ERROR(msg);
 
 		return data;
 	}
@@ -70,16 +86,15 @@ std::vector<uint8_t> ConvertAnimation(std::vector<uint8_t>&& data, const std::st
 	Writer writer;
 	MemoryWriterContainer* container = (MemoryWriterContainer*)writer.GetContainer();
 
-	animation.Write(writer,
-	         diesel::DieselFormatsLoadingParameters(diesel::EngineVersion::DIESEL_V3, diesel::Renderer::UNSPECIFIED,
-	                                                diesel::FileSourcePlatform::WINDOWS_64));
+	animation.Write(writer, diesel::DieselFormatsLoadingParameters(diesel::EngineVersion::DIESEL_V3,
+	                                                               diesel::Renderer::UNSPECIFIED,
+	                                                               diesel::FileSourcePlatform::WINDOWS_64));
 
 	writer.Close();
 
-	// Nasty bodge, I'm sure this is undefined behaviour but it will work here :)
-	std::vector<char> signedData = container->TakeData();
-	std::vector<uint8_t>* aliasingViolationLivesHere = (std::vector<uint8_t>*)&signedData;
-	std::vector<uint8_t> unsignedData = std::move(*aliasingViolationLivesHere);
-
-	return unsignedData;
+	const std::vector<char>& convertedData = container->GetData();
+	std::vector<uint8_t> result(convertedData.size());
+	if (!result.empty())
+		memcpy(result.data(), convertedData.data(), result.size());
+	return result;
 }
