@@ -310,16 +310,15 @@ static UpdateCheckCacheState ReadCachedUpdateState()
 	return UpdateCheckCacheState::UP_TO_DATE;
 }
 
-// timeoutMS can be INFINITE
-// Returns true if we launched the process and it exited within the timeout
-static bool RunUpdateProcess(std::string commandLine, const std::string& startDir, DWORD timeoutMS)
+#ifdef SBLT_ENABLE_UPSTREAM_DLL_UPDATES
+static bool StartUpdateProcess(std::string commandLine, const std::string& startDir, DWORD creationFlags,
+                               PROCESS_INFORMATION& processInfo)
 {
 	STARTUPINFO si;
-	PROCESS_INFORMATION pi;
 
 	ZeroMemory(&si, sizeof(si));
 	si.cb = sizeof(si);
-	ZeroMemory(&pi, sizeof(pi));
+	ZeroMemory(&processInfo, sizeof(processInfo));
 
 	// commandLine has to be a C++ string, as CreateProcess will modify the pointer we give it
 
@@ -329,31 +328,61 @@ static bool RunUpdateProcess(std::string commandLine, const std::string& startDi
 	                    nullptr, // Process handle not inheritable
 	                    nullptr, // Thread handle not inheritable
 	                    FALSE, // Set handle inheritance to FALSE
-	                    0, // No creation flags
+	                    creationFlags,
 	                    nullptr, // Use parent's environment block
 	                    startDir.c_str(), // Use parent's starting directory
 	                    &si, // Pointer to STARTUPINFO structure
-	                    &pi) // Pointer to PROCESS_INFORMATION structure
+	                    &processInfo) // Pointer to PROCESS_INFORMATION structure
 	)
 	{
 		std::string msg = std::format("Update check: CreateProcess failed ({})", GetLastError());
 		RAIDHOOK_LOG_WARN(msg);
 		return false;
 	}
+	return true;
+}
+
+static bool LaunchUpdateProcess(std::string commandLine, const std::string& startDir)
+{
+	PROCESS_INFORMATION processInfo;
+	if (!StartUpdateProcess(std::move(commandLine), startDir, CREATE_NO_WINDOW, processInfo))
+		return false;
+
+	CloseHandle(processInfo.hProcess);
+	CloseHandle(processInfo.hThread);
+	return true;
+}
+
+// timeoutMS can be INFINITE
+// Returns true if we launched the process and it exited successfully within the timeout
+static bool RunUpdateProcess(std::string commandLine, const std::string& startDir, DWORD timeoutMS)
+{
+	PROCESS_INFORMATION processInfo;
+	if (!StartUpdateProcess(std::move(commandLine), startDir, 0, processInfo))
+		return false;
 
 	// Wait until child process exits, or our timeout elapses.
-	DWORD state = WaitForSingleObject(pi.hProcess, timeoutMS);
+	DWORD state = WaitForSingleObject(processInfo.hProcess, timeoutMS);
+	DWORD exitCode = ERROR_GEN_FAILURE;
+	if (state == WAIT_OBJECT_0)
+		GetExitCodeProcess(processInfo.hProcess, &exitCode);
 
 	// Close process and thread handles.
-	CloseHandle(pi.hProcess);
-	CloseHandle(pi.hThread);
+	CloseHandle(processInfo.hProcess);
+	CloseHandle(processInfo.hThread);
 
-	// Did the process exit before the timeout?
-	return state == WAIT_OBJECT_0;
+	return state == WAIT_OBJECT_0 && exitCode == 0;
 }
+#endif
 
 void raidhook::CheckForUpdates()
 {
+#ifndef SBLT_ENABLE_UPSTREAM_DLL_UPDATES
+	// The inherited updater downloads the signed upstream DLL, not this fork.
+	// Leaving it on would replace this build after the first version mismatch.
+	RAIDHOOK_LOG_LOG("Upstream DLL auto-updates are disabled in this fork");
+	return;
+#else
 	// This would get *really* annoying if you're working on the DLL
 	if (Util::GetFileType("mods/disable dll updates.txt") != Util::FileType::FileType_None)
 		return;
@@ -376,26 +405,24 @@ void raidhook::CheckForUpdates()
 	path dllPath = dllFilename;
 	path gameDir = dllPath.parent_path();
 	std::string dllName = dllPath.filename().string();
-
 	std::string commandLine = std::format("rundll32.exe .\\{},RUNDLL_DoUpdateCheck", dllName);
 
-	// If we found there was an update pending last time we checked, check again just in case
-	// it was rolled back or something. Don't time out though.
-	// If we have no reason to believe there's an update, don't hold up the player's game if
-	// they have particularly slow internet. We'll find out next time they restart the game.
-	DWORD timeoutMS = state == UpdateCheckCacheState::UPDATE_PENDING ? INFINITE : 1500;
-
-	RAIDHOOK_LOG_LOG("Checking for updates");
-	bool finished = RunUpdateProcess(commandLine, gameDir.string(), timeoutMS);
-	if (!finished)
+	if (state == UpdateCheckCacheState::NEEDS_CHECK)
 	{
-		RAIDHOOK_LOG_WARN("Update check timed out");
+		RAIDHOOK_LOG_LOG("Checking for updates in the background");
+		if (!LaunchUpdateProcess(std::move(commandLine), gameDir.string()))
+			RAIDHOOK_LOG_WARN("Couldn't start the update check");
 		return;
 	}
 
-	// Read the file again, and see if we've now found an update.
-	if (ReadCachedUpdateState() != UpdateCheckCacheState::UPDATE_PENDING)
+	// An update found on the previous launch can be rolled back before this one. Revalidate it
+	// before offering to install whatever the endpoint serves now.
+	RAIDHOOK_LOG_LOG("Rechecking the pending update");
+	if (!RunUpdateProcess(std::move(commandLine), gameDir.string(), INFINITE) ||
+	    ReadCachedUpdateState() != UpdateCheckCacheState::UPDATE_PENDING)
+	{
 		return;
+	}
 
 	int promptResult = MessageBox(nullptr,
 	                              "A SuperBLT DLL update is available."
@@ -408,7 +435,7 @@ void raidhook::CheckForUpdates()
 
 	// If so, go ahead and install it
 	commandLine = std::format("rundll32.exe .\\{},RUNDLL_InstallUpdate", dllName);
-	finished = RunUpdateProcess(commandLine, gameDir.string(), INFINITE);
+	bool finished = RunUpdateProcess(std::move(commandLine), gameDir.string(), INFINITE);
 
 	if (!finished)
 	{
@@ -423,6 +450,7 @@ void raidhook::CheckForUpdates()
 		MessageBox(nullptr, "Restart the game to complete the update process.", "SuperBLT", MB_OK);
 		ExitProcess(0);
 	}
+#endif
 }
 
 static bool VerifySignature(const uint8_t* data, size_t dataSize, const uint8_t* signature, size_t signatureSize)

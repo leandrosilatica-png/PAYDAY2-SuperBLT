@@ -4,7 +4,6 @@
 
 #include "LuaAsyncIO.h"
 
-#include <atomic>
 #include <condition_variable>
 #include <fstream>
 #include <functional>
@@ -12,6 +11,7 @@
 #include <queue>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <errno.h>
 #include <string.h>
@@ -33,12 +33,70 @@ struct IOCompletion
 	std::function<void()> func;
 };
 
-static std::mutex task_mutex;
-static std::queue<IOTask> task_list;
-static std::condition_variable condition_var;
-static int thread_count;
-
 RAIDHOOK_REGISTER_EVENTQUEUE(IOCompletion, Completions);
+
+class IOThreadPool
+{
+  public:
+	IOThreadPool()
+	{
+		workers.reserve(MAX_THREADS);
+		for (int i = 0; i < MAX_THREADS; ++i)
+			workers.emplace_back([this]() { run(); });
+	}
+
+	~IOThreadPool()
+	{
+		{
+			std::lock_guard guard(mutex);
+			stopping = true;
+		}
+		condition.notify_all();
+		for (std::thread& worker : workers)
+			worker.join();
+	}
+
+	void dispatch(IOTask task)
+	{
+		{
+			std::lock_guard guard(mutex);
+			tasks.push(std::move(task));
+		}
+		condition.notify_one();
+	}
+
+  private:
+	void run()
+	{
+		while (true)
+		{
+			IOTask task;
+			{
+				std::unique_lock lock(mutex);
+				condition.wait(lock, [this]() { return stopping || !tasks.empty(); });
+				if (stopping && tasks.empty())
+					return;
+				task = std::move(tasks.front());
+				tasks.pop();
+			}
+			task.func();
+		}
+	}
+
+	std::mutex mutex;
+	std::condition_variable condition;
+	std::queue<IOTask> tasks;
+	std::vector<std::thread> workers;
+	bool stopping = false;
+};
+
+static IOThreadPool& get_io_thread_pool()
+{
+	// SuperBLT remains loaded until the game exits. A process-lifetime pool avoids
+	// joining worker threads from CRT teardown while Windows holds the loader lock.
+	static IOThreadPool* pool = new IOThreadPool();
+	return *pool;
+}
 
 // TODO deduplicate with that in InitiateState
 static void handled_pcall(lua_State* L, int nargs, int nresults)
@@ -76,61 +134,12 @@ static void invoke_on_update(lua_State* L, std::function<void()> func)
 				abort();
 			}
 		},
-		completion);
-}
-
-// MUST BE CALLED UNDER task_mutex
-static void start_task_thread()
-{
-	thread_count++;
-
-	RAIDHOOK_LOG_LOG("Starting async IO thread");
-
-	std::thread thread(
-		[]()
-		{
-			while (true)
-			{
-				// Try and get a task, or timeout
-			    // The timeout ensures that we don't hold a bunch of threads if we're not using them
-				IOTask task;
-				const auto timeout = std::chrono::milliseconds(500);
-				{
-					std::unique_lock lock(task_mutex);
-					bool has_item = condition_var.wait_for(lock, timeout, []() { return !task_list.empty(); });
-					if (!has_item)
-						break;
-					task = std::move(task_list.front());
-					task_list.pop();
-				}
-
-				// Execute this task
-				task.func();
-			}
-
-			RAIDHOOK_LOG_LOG("Exiting async IO thread");
-
-			{
-				std::lock_guard guard(task_mutex);
-				thread_count--;
-			}
-		});
-	thread.detach();
+		std::move(completion));
 }
 
 static void dispatch_task(IOTask&& task)
 {
-	{
-		std::lock_guard guard(task_mutex);
-		task_list.push(std::move(task));
-
-		// Check if we need to start a new thread
-		// Do this under the mutex, since it should not occur very often and we wouldn't want many
-		// threads being started concurrently.
-		if (thread_count == 0 || (thread_count < MAX_THREADS && task_list.size() > 5))
-			start_task_thread();
-	}
-	condition_var.notify_one();
+	get_io_thread_pool().dispatch(std::move(task));
 }
 
 static void dispatch_task(std::function<void()> func)
@@ -150,7 +159,7 @@ static int aio_read(lua_State* L)
 	int completion_func_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	dispatch_task(
-		[filename, completion_func_ref, L]()
+		[filename{std::move(filename)}, completion_func_ref, L]()
 		{
 			std::vector<char> data;
 			bool success = true;
@@ -171,14 +180,14 @@ static int aio_read(lua_State* L)
 				data.resize(length);
 				stream.read(data.data(), data.size());
 			}
-			catch (const std::ios::failure& ex)
+			catch (const std::ios::failure&)
 			{
 				data.clear();
 				success = false;
 			}
 
 			invoke_on_update(L,
-		                     [L, func_ref{completion_func_ref}, &data, success, err{errno}]()
+		                     [L, func_ref{completion_func_ref}, data{std::move(data)}, success, err{errno}]() mutable
 		                     {
 								 lua_rawgeti(L, LUA_REGISTRYINDEX, func_ref);
 								 if (success)
@@ -216,15 +225,14 @@ static int aio_write(lua_State* L)
 	int completion_func_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	dispatch_task(
-		[filename, contents{std::move(contents)}, completion_func_ref, L]()
+		[filename{std::move(filename)}, contents{std::move(contents)}, completion_func_ref, L]()
 		{
 			errno = 0; // Make sure pre-existing errors can't leak in
 
-			std::ofstream stream;
-			if (stream.good())
-				stream.open(filename, std::ios::binary);
+			std::ofstream stream(filename, std::ios::binary);
 			if (stream.good())
 				stream.write(contents.data(), contents.size());
+			stream.close();
 
 			invoke_on_update(L,
 		                     [L, func_ref{completion_func_ref}, status{stream.good()}, err{errno}]()

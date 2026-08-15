@@ -81,8 +81,7 @@ namespace raidhook
 			static bool printed = false;
 			if (!printed)
 			{
-				printf("Warning: Failed to find the NotifyErrorOverlay function in the Lua environment; no in-game "
-				       "notifications will be displayed for caught errors\n");
+				printf("Warning: NotifyErrorOverlay is missing; caught Lua errors will only be written to the log\n");
 				printed = true;
 			}
 		}
@@ -110,7 +109,7 @@ namespace raidhook
 		int args = lua_gettop(L); // Number of arguments
 		if (args < 1)
 		{
-			RAIDHOOK_LOG_WARN("blt.forcepcalls(): Called with no arguments, ignoring request");
+			RAIDHOOK_LOG_WARN("blt.forcepcalls: missing boolean argument; request ignored");
 			return 0;
 		}
 
@@ -354,7 +353,7 @@ namespace raidhook
 		lua_settable(ourData->L, -3);
 		lua_pushstring(ourData->L, "headers");
 		lua_newtable(ourData->L);
-		for (std::pair<std::string, std::string> element : httpItem->responseHeaders)
+		for (const auto& element : httpItem->responseHeaders)
 		{
 			lua_pushstring(ourData->L, element.first.c_str());
 			lua_pushstring(ourData->L, element.second.c_str());
@@ -371,7 +370,7 @@ namespace raidhook
 		delete ourData;
 	}
 
-	static void progress_lua_http(void* data, long progress, long total)
+	static void progress_lua_http(void* data, int64_t progress, int64_t total)
 	{
 		lua_http_data* ourData = (lua_http_data*)data;
 
@@ -676,7 +675,7 @@ namespace raidhook
 		}
 		else
 		{
-			luaL_error(L, "Illegal argument - should be tvgcv (table) or userdata");
+			luaL_error(L, "blt.structid expects exactly one table or userdata argument");
 		}
 
 		char buffer[9]; // 8 chars for the address, one for the null
@@ -870,8 +869,9 @@ namespace blt
 			std::ifstream infileunsafedev("mods/unsafe_developer.txt"); // TODO find better name?
 			if (infileunsafedev.good())
 			{
-				RAIDHOOK_LOG_LOG("Forcing pcalls early!\nPlease backup your save file as this feature is intended for "
-				                 "developers only and might break alot of things down the line!");
+				RAIDHOOK_LOG_WARN(
+					"mods/unsafe_developer.txt enabled: forcing protected calls. Back up your save first; "
+					"this can break game state.");
 				luaF_forcepcalls(L);
 			}
 
@@ -885,8 +885,8 @@ namespace blt
 					                             "Do you want to download the RAID SuperBLT basemod?\n"
 					                        "This is required for using mods", "SuperBLT 'mods/base' folder missing",
 					MB_YESNO); if (result == IDYES) download_blt();*/
-					MessageBox(NULL, "SuperBLT basemod is required to use mods, it will be downloaded now",
-					           "SuperBLT basemod required", MB_OK);
+					MessageBox(NULL, "mods/base is missing. SuperBLT will download the required basemod now.",
+					           "SuperBLT: basemod required", MB_OK);
 					download_blt();
 					return;
 				}
@@ -895,10 +895,9 @@ namespace blt
 				{
 					int result =
 						MessageBox(NULL,
-					               "It appears you have a vanilla BLT basemod. This is incompatible with SuperBLT.\n"
-					               "Please delete your 'mods/base' folder, and run the game again to automatically "
-					               "download a compatible version",
-					               "BLT basemod outdated", MB_OK);
+					               "mods/base belongs to vanilla BLT and won't work here. Delete it, then restart "
+					               "PAYDAY 2; SuperBLT will download the correct version.",
+					               "SuperBLT: incompatible basemod", MB_OK);
 
 					exit(1);
 					return;
@@ -978,7 +977,7 @@ namespace blt
 			}
 
 			int result;
-			RAIDHOOK_LOG_LOG("Initiating Hook");
+			RAIDHOOK_LOG_LOG("Starting SuperBLT");
 
 			result = luaL_loadfilex(L, "mods/base/base.lua", nullptr);
 			if (result == LUA_ERRSYNTAX)
@@ -992,7 +991,7 @@ namespace blt
 			if (result != 0)
 			{
 				size_t len;
-				RAIDHOOK_LOG_ERROR("Failed initializing the basemod:");
+				RAIDHOOK_LOG_ERROR("Basemod startup failed:");
 				RAIDHOOK_LOG_ERROR(lua_tolstring(L, -1, &len));
 				abort();
 			}

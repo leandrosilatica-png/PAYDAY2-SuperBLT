@@ -3,16 +3,27 @@ name: Create SBLT Build
 on:
   push:
     paths:
+      - CMakeLists.txt
       - src/**
       - lib/**
+      - loader/**
       - wren/**
       - .github/workflows/**
   pull_request:
     paths:
+      - CMakeLists.txt
       - src/**
       - lib/**
+      - loader/**
       - wren/**
       - .github/workflows/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   BUILD_TYPE: RelWithDebInfo
@@ -20,44 +31,29 @@ env:
 jobs:
   build:
     runs-on: windows-2022
+    timeout-minutes: 30
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
       with:
-        submodules: true
+        submodules: recursive
         fetch-depth: 0 # Fetch all the tags, so git_version.py works properly
 
-    - name: Install Python3 and CMake
-      run: |
-        choco install -y python3
-        choco install -y cmake
-      shell: powershell
-
-    - name: Set environment paths
-      run: |
-         $env:Path += ';C:\Program Files\CMake\bin'
-      shell: powershell
-
-    - name: Initialize and update Git submodules
-      run: |
-        git submodule init
-        git submodule update
-      shell: bash
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.x'
 
     - name: Add msbuild to PATH
       uses: microsoft/setup-msbuild@v3
 
-      # Step 5: Build the project
-    - name: Build with CMake and MSBuild
-      run: |
-        mkdir build
-        cd build
-        cmake .. -A x64 -G "Visual Studio 17 2022" -DCMAKE_BUILD_TYPE=RelWithDebInfo
-        msbuild SuperBLT.sln /t:Build /p:Configuration=RelWithDebInfo
-      shell: powershell
+    - name: Configure
+      run: cmake -S . -B build -A x64 -G "Visual Studio 17 2022"
 
-      # Step 6: Upload build artifacts
+    - name: Build
+      run: cmake --build build --config $env:BUILD_TYPE --target SuperBLT --parallel
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v7
       with:

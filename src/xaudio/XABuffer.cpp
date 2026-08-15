@@ -22,14 +22,13 @@ namespace sblt
 
 		size_t count = lua_gettop(L);
 
-		ALuint buffers[32];
-
 		if (count > 32)
 		{
 			XAERR("Attempted to create more than 32 ALbuffers in a single call!");
 		}
 
 		vector<string> filenames;
+		filenames.reserve(count);
 		for (size_t i = 0; i < count; i++)
 		{
 			// i+1 because the Lua stack starts at 1, not 0
@@ -37,18 +36,15 @@ namespace sblt
 		}
 		lua_settop(L, 0);
 
-		alGenBuffers(count, buffers);
-		ALERR;
-
 		for (size_t i = 0; i < count; i++)
 		{
-			string filename = filenames[i];
+			const string& filename = filenames[i];
+			auto cached = openBuffers.find(filename);
 
-			if (openBuffers.contains(filename))
+			if (cached != openBuffers.end())
 			{
 				void* handle_mem = lua_newuserdata(L, sizeof(XALuaHandle));
-				new (handle_mem) XALuaHandle(openBuffers[filename]);
-				// TODO don't create buffers for cached stuff
+				new (handle_mem) XALuaHandle(cached->second);
 			}
 			else
 			{
@@ -65,15 +61,19 @@ namespace sblt
 				if (samples == -2)
 					luaL_error(L, "blt.xaudio.loadbuffer: OutOfMemory");
 
+				ALuint buffer;
+				alGenBuffers(1, &buffer);
+				ALERR;
+
 				// Copy the file into our buffer
 				// TODO do this in the background
-				alBufferData(buffers[i], channels == 2 ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16, data,
+				alBufferData(buffer, channels == 2 ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16, data,
 				             samples * sizeof(short) * channels, sampleRate);
 
 				free(data);
 
 				// Create the Lua object
-				XABuffer* buff = new XABuffer(buffers[i], filename, samples, sampleRate);
+				XABuffer* buff = new XABuffer(buffer, filename, samples, sampleRate);
 				*(XALuaHandle*)lua_newuserdata(L, sizeof(XALuaHandle)) = XALuaHandle(buff);
 
 				// Cache it

@@ -4,6 +4,20 @@ This lists the changes between different versions of the SuperBLT DLL,
 the changes for the basemod are listed in their own changelog.
 Contributors other than maintainers are listed in parenthesis after specific changes.
 
+## Unreleased — performance fork
+
+- stopped disabling release optimisation across every C++ dependency
+- accelerated signature scanning on cache misses
+- skipped conversion work for assets that are already 64-bit
+- bounded async file, hash and HTTP workers instead of retaining one thread per job
+- streamed file hashes and removed repeated SHA-256 provider setup
+- disabled the inherited upstream DLL self-updater so it cannot overwrite this fork
+- removed per-line log flushing and fixed XAudio cache-hit buffer leaks
+- restored HTTP certificate verification and actual curl zlib support
+- fixed async I/O, HTTP event ordering, datastore reads and Wren hook-state bugs
+
+## Inherited history
+
 ## Version 1.1.1.0
 
 - updated zlib-ng (git tag v2.3.3)

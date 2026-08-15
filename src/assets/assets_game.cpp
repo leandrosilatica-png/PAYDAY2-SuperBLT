@@ -139,9 +139,11 @@ static void hook_load(try_open_t orig, subhook::Hook& hook, void* this_, Archive
 		return;
 
 	// Not a file store, or pointing somewhere inside a crate file?
-	// HW12Dev: Checking for a filedatastore here means that files that got cached by DB and put into a ConstMemoryDataStore because it is currently loading streaming resources.
-	// either dont check filedatastore, check if it was cached or check if the archive matches the name "@IDxxxxxxxxxxxxxxxx@.@IDxxxxxxxxxxxxxxxx@" (pretty sure nothing else follows that naming scheme for archives)
-	//if (!IsFileDataStore(archive->datastore) || archive->position)
+	// HW12Dev: Checking for a filedatastore here means that files that got cached by DB and put into a
+	// ConstMemoryDataStore because it is currently loading streaming resources. either dont check filedatastore, check
+	// if it was cached or check if the archive matches the name "@IDxxxxxxxxxxxxxxxx@.@IDxxxxxxxxxxxxxxxx@" (pretty
+	// sure nothing else follows that naming scheme for archives)
+	// if (!IsFileDataStore(archive->datastore) || archive->position)
 	if (archive->position)
 		return;
 
@@ -149,7 +151,10 @@ static void hook_load(try_open_t orig, subhook::Hook& hook, void* this_, Archive
 
 	if (SCRIPTDATA_TYPES.contains(*type))
 	{
-		ConvertData(archive, ConvertScriptData);
+		if (CheckScriptDataRequiresConversion(archive->datastore))
+		{
+			ConvertData(archive, ConvertScriptData);
+		}
 
 		// char msg[100];
 		// snprintf(msg, sizeof(msg), "Loading %016llx.%016llx", *name, *type);
@@ -173,11 +178,15 @@ static void hook_load(try_open_t orig, subhook::Hook& hook, void* this_, Archive
 		return;
 	}
 
-	if(*type == IDS_ANIMATION)
+	if (*type == IDS_ANIMATION)
 	{
-		// HW12Dev: It's okay to read them all and decompress them from crates anyways, the memory usage is the same either way
+		// HW12Dev: It's okay to read them all and decompress them from crates anyways, the memory usage is the same
+		// either way
 
-		ConvertData(archive, ConvertAnimation);
+		if (CheckAnimationRequiresConversion(archive->datastore))
+		{
+			ConvertData(archive, ConvertAnimation);
+		}
 
 		// Don't attempt any further format conversion.
 		return;
@@ -185,13 +194,19 @@ static void hook_load(try_open_t orig, subhook::Hook& hook, void* this_, Archive
 
 	if (*type == IDS_FONT)
 	{
-		ConvertData(archive, ConvertFont);
+		if (CheckFontRequiresConversion(archive->datastore))
+		{
+			ConvertData(archive, ConvertFont);
+		}
 		return;
 	}
 
 	if (*type == IDS_MASSUNIT)
 	{
-		ConvertData(archive, ConvertMassunit);
+		if (CheckMassunitRequiresConversion(archive->datastore))
+		{
+			ConvertData(archive, ConvertMassunit);
+		}
 		return;
 	}
 }

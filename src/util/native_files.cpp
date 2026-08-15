@@ -75,12 +75,7 @@ namespace raidhook
 		bool IsSymlink(const std::string& path)
 		{
 			DWORD dwAttrib = GetFileAttributes(path.c_str());
-
-			if (dwAttrib == FILE_ATTRIBUTE_REPARSE_POINT)
-			{
-				return true;
-			}
-			return false;
+			return dwAttrib != INVALID_FILE_ATTRIBUTES && (dwAttrib & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 		}
 
 		bool DirectoryExists(const std::string& dir)

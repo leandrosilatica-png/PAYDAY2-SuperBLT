@@ -3,15 +3,18 @@
 //
 
 #include "convert.h"
+#include "dbutil/Archive.h"
+#include "dbutil/Datastore.h"
 #include "subhook.h"
 #include "util/util.h"
-#include "dbutil/Archive.h"
 
 #include <diesel/modern/scriptdata.h>
 
+#include <cstring>
+
 struct DslVector
 {
-	void* allocator;
+	uint64_t allocator;
 	char padding[24];
 };
 
@@ -43,6 +46,34 @@ struct ScriptdataHeader32
 };
 static_assert(sizeof(ScriptdataHeader32) == 96);
 
+static bool Is64BitScriptData(const ScriptdataHeader& header)
+{
+	return header.numbers.allocator == 0 && header.strings.allocator == 0 && header.vector3s.allocator == 0 &&
+	       header.quaternions.allocator == 0 && header.idstrings.allocator == 0 && header.tables.allocator == 0;
+}
+
+static bool Is64BitScriptData(const void* data, size_t size)
+{
+	if (size < sizeof(ScriptdataHeader))
+		return false;
+
+	ScriptdataHeader header;
+	memcpy(&header, data, sizeof(header));
+	return Is64BitScriptData(header);
+}
+
+bool CheckScriptDataRequiresConversion(BLTAbstractDataStore* datastore)
+{
+	if (datastore->size() < sizeof(ScriptdataHeader))
+		return true;
+
+	ScriptdataHeader header;
+	if (datastore->read(0, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header))
+		return true;
+
+	return !Is64BitScriptData(header);
+}
+
 std::vector<uint8_t> ConvertScriptData(std::vector<uint8_t>&& data, const std::string& path)
 {
 	/*
@@ -54,17 +85,12 @@ std::vector<uint8_t> ConvertScriptData(std::vector<uint8_t>&& data, const std::s
 	if (data.size() < sizeof(ScriptdataHeader32))
 		return data;
 
-	ScriptdataHeader* header = (ScriptdataHeader*)data.data();
-
 	// Check if this is a 32-bit file.
 	//
 	// Due to the pointer size differences, it's very likely the allocator pointers (which are null
 	// in the files, and IIRC overwritten with an allocator at load time) will overlap with one of the
 	// pointer/size values in a 32-bit file.
-	if (data.size() >= sizeof(ScriptdataHeader) &&
-		(header->numbers.allocator == nullptr && header->strings.allocator == nullptr &&
-	    header->vector3s.allocator == nullptr && header->quaternions.allocator == nullptr &&
-	    header->idstrings.allocator == nullptr && header->tables.allocator == nullptr))
+	if (Is64BitScriptData(data.data(), data.size()))
 	{
 		return data;
 	}
@@ -78,9 +104,9 @@ std::vector<uint8_t> ConvertScriptData(std::vector<uint8_t>&& data, const std::s
 	                                                            diesel::FileSourcePlatform::WINDOWS_32)))
 	{
 		char msg[512];
-		snprintf(msg, sizeof(msg), "Error occurred while reading 32bit ScriptData, is the file corrupt? File: %s",
+		snprintf(msg, sizeof(msg), "32-bit scriptdata conversion failed for '%s'; the file is invalid or unsupported.",
 		         path.c_str());
-		RAIDHOOK_LOG_LOG(msg);
+		RAIDHOOK_LOG_ERROR(msg);
 
 		return data;
 	}
@@ -98,28 +124,31 @@ std::vector<uint8_t> ConvertScriptData(std::vector<uint8_t>&& data, const std::s
 
 	writer.Close();
 
-	// Nasty bodge, I'm sure this is undefined behaviour but it will work here :)
-	std::vector<char> signedData = container->TakeData();
-	std::vector<uint8_t>* aliasingViolationLivesHere = (std::vector<uint8_t>*)&signedData;
-	std::vector<uint8_t> unsignedData = std::move(*aliasingViolationLivesHere);
-
-	return unsignedData;
+	const std::vector<char>& convertedData = container->GetData();
+	std::vector<uint8_t> result(convertedData.size());
+	if (!result.empty())
+		memcpy(result.data(), convertedData.data(), result.size());
+	return result;
 }
-
 
 static subhook::Hook ScriptSerializer__from_binary_hook;
 
 void* ScriptSerializer__from_binary_h(void* this_, void* lua_arg_result, const PDString& data, void* metatable_registry)
 {
-	std::vector<uint8_t> to_convert(data.begin(), data.end());
-
-	to_convert = ConvertScriptData(std::move(to_convert), "");
-
+	std::vector<uint8_t> converted_data;
 	PDString converted;
-	converted.set_data((char*)to_convert.data(), to_convert.size());
+	const PDString* load_data = &data;
+
+	if (!Is64BitScriptData(data.data(), data.size()))
+	{
+		converted_data.assign(data.begin(), data.end());
+		converted_data = ConvertScriptData(std::move(converted_data), "");
+		converted.set_data(reinterpret_cast<char*>(converted_data.data()), converted_data.size());
+		load_data = &converted;
+	}
 
 	ScriptSerializer__from_binary_hook.Remove();
-	void* ret = ScriptSerializer__from_binary(this_, lua_arg_result, converted, metatable_registry);
+	void* ret = ScriptSerializer__from_binary(this_, lua_arg_result, *load_data, metatable_registry);
 	ScriptSerializer__from_binary_hook.Install();
 	return ret;
 }

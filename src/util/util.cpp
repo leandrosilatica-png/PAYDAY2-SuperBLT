@@ -1,10 +1,15 @@
 #include "util.h"
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <format>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <Windows.h>
@@ -14,6 +19,86 @@ namespace raidhook
 {
 	namespace Util
 	{
+		namespace
+		{
+			class SHA256Provider
+			{
+			  public:
+				SHA256Provider()
+				{
+					if (BCryptOpenAlgorithmProvider(&handle, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0)
+						throw std::runtime_error("Failed to open SHA-256 algorithm provider");
+
+					DWORD resultLength = 0;
+					if (BCryptGetProperty(handle, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLength),
+					                      sizeof(objectLength), &resultLength, 0) != 0)
+					{
+						BCryptCloseAlgorithmProvider(handle, 0);
+						throw std::runtime_error("Failed to get hash object length");
+					}
+				}
+
+				~SHA256Provider()
+				{
+					BCryptCloseAlgorithmProvider(handle, 0);
+				}
+
+				BCRYPT_ALG_HANDLE handle = nullptr;
+				DWORD objectLength = 0;
+			};
+
+			SHA256Provider& GetSHA256Provider()
+			{
+				static SHA256Provider provider;
+				return provider;
+			}
+
+			class SHA256Hash
+			{
+			  public:
+				SHA256Hash()
+				{
+					auto& provider = GetSHA256Provider();
+					object.resize(provider.objectLength);
+					if (BCryptCreateHash(provider.handle, &handle, object.data(), provider.objectLength, nullptr, 0,
+					                     0) != 0)
+						throw std::runtime_error("Failed to create SHA-256 hash");
+				}
+
+				~SHA256Hash()
+				{
+					if (handle)
+						BCryptDestroyHash(handle);
+				}
+
+				void update(const void* data, size_t size)
+				{
+					auto* bytes = static_cast<const unsigned char*>(data);
+					while (size != 0)
+					{
+						ULONG chunk = static_cast<ULONG>(std::min<size_t>(size, std::numeric_limits<ULONG>::max()));
+						if (BCryptHashData(handle, const_cast<PUCHAR>(bytes), chunk, 0) != 0)
+							throw std::runtime_error("Failed to hash data");
+						bytes += chunk;
+						size -= chunk;
+					}
+				}
+
+				std::vector<uint8_t> finish()
+				{
+					std::vector<uint8_t> hash(32);
+					if (BCryptFinishHash(handle, hash.data(), static_cast<ULONG>(hash.size()), 0) != 0)
+						throw std::runtime_error("Failed to finish SHA-256 hash");
+					return hash;
+				}
+
+			  private:
+				BCRYPT_HASH_HANDLE handle = nullptr;
+				std::vector<uint8_t> object;
+			};
+
+			std::string sha256_file(const std::string& filename);
+		} // namespace
 
 		Exception::Exception(const char* file, int line) : mFile(file), mLine(line)
 		{
@@ -47,94 +132,83 @@ namespace raidhook
 		// helper function to print the digest bytes as a hex string
 		std::string bytes_to_hex_string(const std::vector<uint8_t>& bytes)
 		{
-			std::ostringstream stream;
-			for (uint8_t b : bytes)
+			static constexpr char hex[] = "0123456789abcdef";
+			std::string result(bytes.size() * 2, '\0');
+			for (size_t i = 0; i < bytes.size(); ++i)
 			{
-				stream << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(b);
+				result[i * 2] = hex[bytes[i] >> 4];
+				result[i * 2 + 1] = hex[bytes[i] & 0xf];
 			}
-			return stream.str();
+			return result;
 		}
 
 		// Perform SHA-256 hash using Windows CNG API
 		std::string sha256(const std::string& input)
 		{
-			BCRYPT_ALG_HANDLE hAlgorithm = nullptr;
-			BCRYPT_HASH_HANDLE hHash = nullptr;
-			NTSTATUS status;
-			DWORD hashObjectLength = 0, resultLength = 0;
-			DWORD hashLength = 32;
-			std::vector<uint8_t> hash(hashLength);
-			std::vector<uint8_t> hashObject;
-
-			status = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-			if (status != 0)
-				throw std::runtime_error("Failed to open SHA-256 algorithm provider");
-			try
-			{
-				status = BCryptGetProperty(hAlgorithm, BCRYPT_OBJECT_LENGTH, (PUCHAR)&hashObjectLength, sizeof(DWORD),
-				                           &resultLength, 0);
-				if (status != 0)
-					throw std::runtime_error("Failed to get hash object length");
-				hashObject.resize(hashObjectLength);
-				status = BCryptCreateHash(hAlgorithm, &hHash, hashObject.data(), hashObjectLength, nullptr, 0, 0);
-				if (status != 0)
-					throw std::runtime_error("Failed to create hash");
-				try
-				{
-					status = BCryptHashData(hHash, (PUCHAR)input.data(), input.size(), 0);
-					if (status != 0)
-						throw std::runtime_error("Failed to hash data");
-					status = BCryptFinishHash(hHash, hash.data(), hashLength, 0);
-					if (status != 0)
-						throw std::runtime_error("Failed to finish hash");
-				}
-				catch (std::runtime_error e)
-				{
-					BCryptDestroyHash(hHash);
-					throw std::runtime_error(e);
-				}
-			}
-			catch (std::runtime_error e)
-			{
-				BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-				throw std::runtime_error(e);
-			}
-			BCryptDestroyHash(hHash);
-			BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-
-			return bytes_to_hex_string(hash);
+			SHA256Hash hash;
+			hash.update(input.data(), input.size());
+			return bytes_to_hex_string(hash.finish());
 		}
+
+		namespace
+		{
+			std::string sha256_file(const std::string& filename)
+			{
+				SHA256Hash hash;
+				std::ifstream file(filename, std::ios::binary);
+				std::array<char, 256 * 1024> buffer;
+				while (file)
+				{
+					file.read(buffer.data(), buffer.size());
+					std::streamsize bytesRead = file.gcount();
+					if (bytesRead > 0)
+						hash.update(buffer.data(), static_cast<size_t>(bytesRead));
+				}
+				return bytes_to_hex_string(hash.finish());
+			}
+		} // namespace
 
 		void RecurseDirectoryPaths(std::vector<std::string>& paths, std::string directory, bool ignore_versioning)
 		{
-			std::vector<std::string> dirs = raidhook::Util::GetDirectoryContents(directory, true);
-			std::vector<std::string> files = raidhook::Util::GetDirectoryContents(directory);
-			for (auto it = files.begin(); it < files.end(); it++)
-			{
-				std::string fpath = directory + *it;
+			WIN32_FIND_DATAA entry;
+			HANDLE search = FindFirstFileA((directory + "*").c_str(), &entry);
+			if (search == INVALID_HANDLE_VALUE)
+				RAIDHOOK_THROW_IO_MSG("FindFirstFile() failed");
 
-				// Add the path on the list
-				paths.push_back(fpath);
-			}
-			for (auto it = dirs.begin(); it < dirs.end(); it++)
+			do
 			{
-				if (*it == "." || *it == "..")
+				std::string_view name(entry.cFileName);
+				bool isDirectory = (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+				if (!isDirectory)
+				{
+					paths.push_back(directory + entry.cFileName);
 					continue;
-				if (ignore_versioning && (*it == ".hg" || *it == ".git"))
+				}
+
+				if (name == "." || name == "..")
 					continue;
-				RecurseDirectoryPaths(paths, directory + *it + "/", false);
-			}
+				if (ignore_versioning && (name == ".hg" || name == ".git"))
+					continue;
+				if ((entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+					continue;
+
+				RecurseDirectoryPaths(paths, directory + entry.cFileName + "/", ignore_versioning);
+			} while (FindNextFileA(search, &entry));
+
+			DWORD error = GetLastError();
+			FindClose(search);
+			if (error != ERROR_NO_MORE_FILES)
+				RAIDHOOK_THROW_IO_MSG("FindNextFile() failed");
 		}
 
-		static bool CompareStringsCaseInsensitive(std::string a, std::string b)
+		static bool CompareStringsCaseInsensitive(const std::string& a, const std::string& b)
 		{
-			std::transform(a.begin(), a.end(), a.begin(), ::tolower);
-			std::transform(b.begin(), b.end(), b.begin(), ::tolower);
-
-			return a < b;
+			return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+			                                    [](unsigned char left, unsigned char right)
+			                                    { return std::tolower(left) < std::tolower(right); });
 		}
 
-		std::string GetDirectoryHash(std::string directory)
+		std::string GetDirectoryHash(const std::string& directory)
 		{
 			std::vector<std::string> paths;
 			RecurseDirectoryPaths(paths, directory, true);
@@ -147,21 +221,21 @@ namespace raidhook
 			std::sort(paths.begin(), paths.end(), CompareStringsCaseInsensitive);
 
 			std::string hashconcat;
+			hashconcat.reserve(paths.size() * 64);
 
-			for (auto it = paths.begin(); it < paths.end(); it++)
+			for (const std::string& path : paths)
 			{
-				std::string hashstr = sha256(raidhook::Util::GetFileContents(*it));
-				hashconcat += hashstr;
+				hashconcat += sha256_file(path);
 			}
 
 			return sha256(hashconcat);
 		}
 
-		std::string GetFileHash(std::string file)
+		std::string GetFileHash(const std::string& file)
 		{
 			// This has to be hashed twice otherwise it won't be the same hash if we're checking against a file uploaded
 			// to the server
-			std::string hash = sha256(raidhook::Util::GetFileContents(file));
+			std::string hash = sha256_file(file);
 			return sha256(hash);
 		}
 

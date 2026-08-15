@@ -8,7 +8,7 @@ DIR = Path(__file__).parent
 
 def get_git_version() -> str:
     result = subprocess.run(
-        ["git", "describe", "--dirty=-dirty"],
+        ["git", "describe", "--always", "--dirty=-dirty"],
         cwd=DIR,
         stdout=subprocess.PIPE,
         stderr=sys.stderr,  # If the command fails (particularly in CI) we want to know why

@@ -2,8 +2,8 @@
 // Created by ZNix on 23/11/2020.
 //
 
-#include "../dbutil/DB.h"
 #include "db_hooks.h"
+#include "../dbutil/DB.h"
 #include "wrenloader.h"
 #include "xmltweaker_internal.h"
 
@@ -263,7 +263,7 @@ static void wrenLoadAssetContents(WrenVM* vm)
 		wrenAbortFiber(vm, 0);
 		return;
 	}
-	
+
 	wrenSetSlotBytes(vm, 0, (const char*)contents.data(), contents.size());
 }
 
@@ -326,15 +326,15 @@ bool raidhook::tweaker::dbhook::hook_asset_load(const blt::idfile& asset_file, B
 		// what happened.
 		if (!file)
 		{
-			char buff[1024];
-			memset(buff, 0, sizeof(buff));
-			snprintf(buff, sizeof(buff) - 1, "Failed to open hooked asset file " IDPFP " while loading " IDPFP,
-			         bundle_item.name, bundle_item.ext, asset_file.name, asset_file.ext);
-			RAIDHOOK_LOG_ERROR(buff);
+		    char buff[1024];
+		    memset(buff, 0, sizeof(buff));
+		    snprintf(buff, sizeof(buff) - 1, "Failed to open hooked asset file " IDPFP " while loading " IDPFP,
+		             bundle_item.name, bundle_item.ext, asset_file.name, asset_file.ext);
+		    RAIDHOOK_LOG_ERROR(buff);
 
-			MessageBox(nullptr, "Failed to load hooked asset - file not found. See log for more information.",
-			           "Wren Error", MB_OK);
-			ExitProcess(1);
+		    MessageBox(nullptr, "Failed to load hooked asset - file not found. See log for more information.",
+		               "Wren Error", MB_OK);
+		    ExitProcess(1);
 		}
 
 		BLTAbstractDataStore* ds = DieselDB::Instance()->Open(file->bundle);
@@ -343,9 +343,9 @@ bool raidhook::tweaker::dbhook::hook_asset_load(const blt::idfile& asset_file, B
 
 		// If this is an end-of-file asset we have to find it's length
 		if (file->HasLength())
-			*out_len = file->length;
+		    *out_len = file->length;
 		else
-			*out_len = ds->size() - file->offset;
+		    *out_len = ds->size() - file->offset;
 		*/
 	};
 
@@ -523,7 +523,7 @@ void DBAssetHook::getMode(WrenVM* vm)
 void DBAssetHook::isEnabled(WrenVM* vm)
 {
 	auto* it = get_this(vm);
-	wrenSetSlotBool(vm, 0, it->plain_file->empty() && it->direct_bundle.is_empty() && !it->wren_loader_obj);
+	wrenSetSlotBool(vm, 0, it->plain_file.has_value() || !it->direct_bundle.is_empty() || it->wren_loader_obj);
 }
 
 void DBAssetHook::disable(WrenVM* vm)

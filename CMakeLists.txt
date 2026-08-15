@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 
 project(SuperBLT CXX C)
 
@@ -26,6 +26,13 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(MSVC)
+	add_compile_options(
+		"$<$<COMPILE_LANG_AND_ID:C,MSVC>:/MP>"
+		"$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/MP>"
+	)
+endif()
 
 # Enable XAudio
 add_definitions(-DENABLE_XAUDIO)
@@ -115,7 +122,7 @@ add_custom_command(
 
 list(APPEND sources loader/loader.cpp loader/loader_manual_asm.asm src/Resource.rc "${LOADER_GEN_ASM}" "${LOADER_GEN_DEF}")
 
-set_property(SOURCE loader/loader.asm PROPERTY LANGUAGE ASM_MASM)
+set_property(SOURCE loader/loader_manual_asm.asm PROPERTY LANGUAGE ASM_MASM)
 set_property(SOURCE "${LOADER_GEN_ASM}" PROPERTY LANGUAGE ASM_MASM)
 
 ###############################################################################
@@ -124,6 +131,13 @@ set_property(SOURCE "${LOADER_GEN_ASM}" PROPERTY LANGUAGE ASM_MASM)
 
 add_library(SuperBLT SHARED ${sources})
 
+# The inherited updater downloads the signed upstream ModWorkshop DLL. Keep it
+# off here so a custom fork build cannot replace itself with upstream.
+option(SBLT_ENABLE_UPSTREAM_DLL_UPDATES "Allow this build to replace itself with the upstream DLL" OFF)
+if(SBLT_ENABLE_UPSTREAM_DLL_UPDATES)
+	target_compile_definitions(SuperBLT PRIVATE SBLT_ENABLE_UPSTREAM_DLL_UPDATES)
+endif()
+
 target_compile_options(SuperBLT PRIVATE
 	-DCURL_STATICLIB
 	-DSUBHOOK_STATIC
@@ -131,13 +145,43 @@ target_compile_options(SuperBLT PRIVATE
 	-DNOMINMAX # Make std::min and std::max usable
 )
 
-# General optimisation breaks calls to certain lua functions, so replace it.
-# We statically link to reduce dependencies
-foreach(flag_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO)
-	if(${flag_var} MATCHES "/O2")
-		string(REGEX REPLACE "/O2" "/Od /Oi /Ot /Oy /Ob2 /GF /Gy" ${flag_var} "${${flag_var}}")
-	endif(${flag_var} MATCHES "/O2")
-endforeach(flag_var)
+# Some game-facing Lua calls still rely on compiler-sensitive ABI behaviour. Keep
+# that workaround on SuperBLT's C++ code instead of disabling optimisation in
+# every C++ dependency pulled into this build.
+if(MSVC)
+	set(SBLT_OPT_CONFIG "$<OR:$<CONFIG:Release>,$<CONFIG:MinSizeRel>,$<CONFIG:RelWithDebInfo>>")
+	target_compile_options(SuperBLT PRIVATE
+		"$<$<AND:$<COMPILE_LANGUAGE:CXX>,${SBLT_OPT_CONFIG}>:/Od>"
+		"$<$<AND:$<COMPILE_LANGUAGE:CXX>,${SBLT_OPT_CONFIG}>:/Oi>"
+		"$<$<AND:$<COMPILE_LANGUAGE:CXX>,${SBLT_OPT_CONFIG}>:/Ot>"
+		"$<$<AND:$<COMPILE_LANGUAGE:CXX>,${SBLT_OPT_CONFIG}>:/Oy>"
+		"$<$<AND:$<COMPILE_LANGUAGE:CXX>,${SBLT_OPT_CONFIG}>:/Ob2>"
+		"$<$<AND:$<COMPILE_LANGUAGE:CXX>,${SBLT_OPT_CONFIG}>:/GF>"
+		"$<$<AND:$<COMPILE_LANGUAGE:CXX>,${SBLT_OPT_CONFIG}>:/Gy>"
+	)
+
+	# These files don't cross the game/Lua ABI boundary and benefit directly from
+	# normal optimiser passes on their scanning, hashing, queue and parsing loops.
+	set(SBLT_SAFE_OPTIMISED_SOURCES
+		src/http/http.cpp
+		src/signatures/signatures.cpp
+		src/threading/threadqueue.cpp
+		src/util/files.cpp
+		src/util/hashing.cpp
+		src/util/logging.cpp
+		src/util/native_files.cpp
+		src/util/util.cpp
+	)
+	set_property(SOURCE ${SBLT_SAFE_OPTIMISED_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+		"$<${SBLT_OPT_CONFIG}:/O2>"
+	)
+
+	target_link_options(SuperBLT PRIVATE
+		"$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:/INCREMENTAL:NO>"
+		"$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:/OPT:REF>"
+		"$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:/OPT:ICF>"
+	)
+endif()
 
 # Link against libraries
 target_link_libraries(SuperBLT crypt32.lib ws2_32.lib version.lib)
@@ -194,20 +238,11 @@ list(GET LIBPSL_VERSION_LIST 2 LIBPSL_VERSION_PATCH)
 
 message(STATUS "Using libpsl version: ${LIBPSL_VERSION}")
 
-# Compute numerical value
-math(EXPR LIBPSL_VERSION_VALUE "(${LIBPSL_VERSION_MAJOR} << 16) + (${LIBPSL_VERSION_MINOR} << 8) + ${LIBPSL_VERSION_PATCH}")
-
-# Convert to padded hex string without 0x
-string(HEX ${LIBPSL_VERSION_VALUE} LIBPSL_HEX_VALUE)
-string(LENGTH "${LIBPSL_HEX_VALUE}" HEX_LEN)
-math(EXPR PAD_LEN "6 - ${HEX_LEN}")
-if(PAD_LEN GREATER 0)
-    string(REPEAT "0" ${PAD_LEN} PADDING)
-    set(LIBPSL_HEX_VALUE "${PADDING}${LIBPSL_HEX_VALUE}")
-endif()
-
-# Set hex with 0x for substitution
-set(LIBPSL_VERSION_NUMBER "0x${LIBPSL_HEX_VALUE}")
+# Compute the numeric value expected by libpsl's public header.
+math(EXPR LIBPSL_VERSION_NUMBER
+	"(${LIBPSL_VERSION_MAJOR} << 16) + (${LIBPSL_VERSION_MINOR} << 8) + ${LIBPSL_VERSION_PATCH}"
+	OUTPUT_FORMAT HEXADECIMAL
+)
 
 set(PACKAGE_NAME "libpsl")
 set(PACKAGE_VERSION "${LIBPSL_VERSION}")
@@ -293,6 +328,14 @@ set(ZLIB_LIBRARY zlib-ng CACHE INTERNAL "")
 set(ZLIB_INCLUDE_DIR ${zlib_SOURCE_DIR} CACHE INTERNAL "")
 target_link_libraries(SuperBLT zlib-ng)
 
+# FindZLIB expects an imported namespaced target. Point that target at the
+# bundled build without hard-coding a configuration-specific .lib path.
+add_library(ZLIB::ZLIB INTERFACE IMPORTED GLOBAL)
+set_target_properties(ZLIB::ZLIB PROPERTIES
+	INTERFACE_INCLUDE_DIRECTORIES "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}"
+	INTERFACE_LINK_LIBRARIES zlib-ng
+)
+
 
 
 # Unfortunately cmake doesn't have namespacing, so we have to set stuff here
@@ -319,11 +362,10 @@ set(CURL_DISABLE_KERBEROS_AUTH ON CACHE BOOL "" FORCE) # included in SSPI
 set(CURL_DISABLE_NTLM ON CACHE BOOL "" FORCE) # included in SSPI
 set(CURL_DISABLE_WEBSOCKETS ON CACHE BOOL "" FORCE) # disable websocket support [ ws(s):// ]
 
-# link curl against our included static zlib, to enable it's libz features
-set(CURL_ZLIB OFF CACHE BOOL "" FORCE)        # prevent it from trying to find system zlib
-set(CMAKE_DISABLE_FIND_PACKAGE_ZLIB ON CACHE BOOL "" FORCE)  # disable external find
+# Link curl against the bundled zlib-ng compatibility target.
+set(CURL_ZLIB ON CACHE BOOL "" FORCE)
 set(ZLIB_LIBRARY zlib-ng CACHE STRING "" FORCE)
-set(ZLIB_INCLUDE_DIR ${zlib_SOURCE_DIR} CACHE PATH "" FORCE)
+set(ZLIB_INCLUDE_DIR ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR} CACHE STRING "" FORCE)
 
 add_subdirectory(lib/sys/curl EXCLUDE_FROM_ALL)
 
